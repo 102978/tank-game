@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>坦克大战 Battle City</title>
 <style>
   :root {
@@ -23,6 +23,10 @@
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
   }
   #wrap {
     display: flex;
@@ -41,6 +45,7 @@
     background: #000;
     border-radius: 6px;
     image-rendering: pixelated;
+    touch-action: none;
   }
   #sidebar {
     width: 200px;
@@ -68,7 +73,7 @@
   #lives { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
   .tank-mini { width: 14px; height: 14px; background: var(--accent); border-radius: 2px; }
   #overlay {
-    position: absolute;
+    position: fixed;
     inset: 0;
     display: flex;
     flex-direction: column;
@@ -103,12 +108,82 @@
   .keys .blank { background: transparent; border: none; }
   #hint { color: #9a9ab0; font-size: 12px; line-height: 1.6; }
   kbd { background:#2a2a34; border:1px solid #4a4a5a; border-radius:4px; padding:1px 6px; font-size:12px; }
+
+  /* ---------- 触屏控制(虚拟摇杆 + 开火按钮) ---------- */
+  #game-box { position: relative; }
+  #touch-controls {
+    display: none;
+    position: absolute; inset: 0;
+    z-index: 5;
+    pointer-events: none;
+  }
+  #touch-controls > * { pointer-events: auto; }
+  #pause-btn {
+    position: absolute; top: 12px; right: 12px;
+    width: 42px; height: 42px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(26, 26, 34, .72);
+    border: 1px solid rgba(255, 255, 255, .25);
+    color: #fff; font-size: 18px; line-height: 1;
+    cursor: pointer;
+  }
+  #joy-zone {
+    position: absolute; left: 0; bottom: 0;
+    width: 55%; height: 62%;
+    touch-action: none;
+  }
+  #joy-base {
+    position: absolute; left: 26px; bottom: 26px;
+    width: 116px; height: 116px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(255, 255, 255, .08);
+    border: 2px solid rgba(255, 255, 255, .28);
+    box-shadow: 0 0 0 6px rgba(255, 255, 255, .03);
+  }
+  #joy-knob {
+    width: 50px; height: 50px; border-radius: 50%;
+    background: rgba(245, 197, 24, .8);
+    box-shadow: 0 0 14px rgba(245, 197, 24, .45);
+    will-change: transform;
+  }
+  #fire-btn {
+    position: absolute; right: 26px; bottom: 26px;
+    width: 88px; height: 88px; border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, .35);
+    background: rgba(224, 78, 42, .78);
+    color: #fff; font-weight: 700; font-size: 15px; letter-spacing: 1px;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+    box-shadow: 0 4px 18px rgba(224, 78, 42, .35);
+  }
+  #fire-btn.active { background: rgba(255, 120, 70, .95); transform: scale(.94); }
+
+  /* ---------- 移动端布局(触屏或窄屏) ---------- */
+  @media (pointer: coarse), (max-width: 760px) {
+    html, body { height: auto; min-height: 100%; overflow: auto; align-items: flex-start; }
+    #wrap { flex-direction: column; align-items: center; gap: 10px; padding: 10px; width: 100%; max-width: 520px; }
+    #game-box { width: min(100%, calc(100vh - 130px)); width: min(100%, calc(100dvh - 130px)); padding: 8px; }
+    canvas { width: 100%; height: auto; }
+    #sidebar { width: 100%; flex-direction: row; gap: 8px; }
+    #sidebar .panel { flex: 1; padding: 10px 12px; }
+    #sidebar .panel h3 { display: none; }
+    #sidebar .stat { display: inline-flex; align-items: baseline; gap: 4px; margin: 0 10px 0 0; font-size: 13px; }
+    #lives { display: inline-flex; gap: 4px; margin: 0; }
+    #hint { display: none; }
+    #overlay h1 { font-size: 28px; letter-spacing: 4px; }
+    #overlay p { font-size: 13px; max-width: 88%; }
+    #touch-controls { display: block; }
+  }
 </style>
 </head>
 <body>
   <div id="wrap">
     <div id="game-box">
       <canvas id="game" width="520" height="520"></canvas>
+      <div id="touch-controls">
+        <button id="pause-btn" aria-label="暂停">⏸</button>
+        <div id="joy-zone"><div id="joy-base"><div id="joy-knob"></div></div></div>
+        <button id="fire-btn">开火</button>
+      </div>
     </div>
     <div id="sidebar">
       <div class="panel">
@@ -178,6 +253,7 @@
   let gameState = "menu";  // menu | playing | paused | over | win | levelclear
   let lastTime = 0;
   let keys = {};
+  let virtual = { dir: null, fire: false };   // 触屏虚拟输入(摇杆/开火)
   let baseAlive = true;
 
   // 音频
@@ -751,11 +827,13 @@
       // 玩家输入
       if (player && player.alive) {
         const before = { x: player.x, y: player.y };
-        let dir = null;
-        if (keys["ArrowUp"] || keys["w"] || keys["W"]) dir = "up";
-        else if (keys["ArrowDown"] || keys["s"] || keys["S"]) dir = "down";
-        else if (keys["ArrowLeft"] || keys["a"] || keys["A"]) dir = "left";
-        else if (keys["ArrowRight"] || keys["d"] || keys["D"]) dir = "right";
+        let dir = virtual.dir;
+        if (!dir) {
+          if (keys["ArrowUp"] || keys["w"] || keys["W"]) dir = "up";
+          else if (keys["ArrowDown"] || keys["s"] || keys["S"]) dir = "down";
+          else if (keys["ArrowLeft"] || keys["a"] || keys["A"]) dir = "left";
+          else if (keys["ArrowRight"] || keys["d"] || keys["D"]) dir = "right";
+        }
 
         if (dir) {
           player.dir = dir;
@@ -768,7 +846,7 @@
           }
           alignTank(player, dir);
         }
-        if (keys[" "] || keys["Spacebar"]) fire(player);
+        if (keys[" "] || keys["Spacebar"] || virtual.fire) fire(player);
         player.cooldown -= dt;
         if (player.spawnProtect > 0) player.spawnProtect -= dt;
       }
@@ -783,15 +861,16 @@
   }
 
   // ---------- 输入 ----------
+  function togglePause() {
+    if (gameState === "playing") { gameState = "paused"; showOverlay("已暂停", "点击“继续游戏”或按 P 继续", "继续游戏"); }
+    else if (gameState === "paused") { hideOverlay(); gameState = "playing"; }
+  }
   window.addEventListener("keydown", (e) => {
     if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"," "].includes(e.key)) {
       e.preventDefault();
     }
     keys[e.key] = true;
-    if (e.key === "p" || e.key === "P") {
-      if (gameState === "playing") { gameState = "paused"; showOverlay("已暂停", "按 P 继续", "继续游戏"); }
-      else if (gameState === "paused") { hideOverlay(); gameState = "playing"; }
-    }
+    if (e.key === "p" || e.key === "P") togglePause();
   });
   window.addEventListener("keyup", (e) => { keys[e.key] = false; });
 
@@ -806,6 +885,72 @@
     hideOverlay();
     startLevel(1);
     gameState = "playing";
+  });
+
+  // ---------- 触屏控制(虚拟摇杆 + 开火) ----------
+  const joyZone = document.getElementById("joy-zone");
+  const joyBase = document.getElementById("joy-base");
+  const joyKnob = document.getElementById("joy-knob");
+  const fireBtn = document.getElementById("fire-btn");
+  const pauseBtn = document.getElementById("pause-btn");
+
+  let joyId = null;          // 当前摇杆指针 id
+  const JOY_RADIUS = 30;     // 摇杆最大位移(px)
+  const JOY_DEADZONE = 10;   // 死区,小于该距离视为未推动
+
+  function joyDirFrom(dx, dy) {
+    if (Math.hypot(dx, dy) < JOY_DEADZONE) return null;
+    if (Math.abs(dx) > Math.abs(dy)) return dx > 0 ? "right" : "left";
+    return dy > 0 ? "down" : "up";
+  }
+
+  function updateJoy(e) {
+    const r = joyBase.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    let dx = e.clientX - cx, dy = e.clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > JOY_RADIUS) { dx = dx / dist * JOY_RADIUS; dy = dy / dist * JOY_RADIUS; }
+    joyKnob.style.transform = `translate(${dx}px, ${dy}px)`;
+    virtual.dir = joyDirFrom(dx, dy);
+  }
+
+  function endJoy(e) {
+    if (e && e.pointerId !== joyId) return;
+    joyId = null;
+    joyKnob.style.transform = "translate(0, 0)";
+    virtual.dir = null;
+  }
+
+  joyZone.addEventListener("pointerdown", (e) => {
+    if (joyId !== null) return;
+    joyId = e.pointerId;
+    joyZone.setPointerCapture(e.pointerId);
+    updateJoy(e);
+    e.preventDefault();
+  });
+  joyZone.addEventListener("pointermove", (e) => {
+    if (e.pointerId !== joyId) return;
+    updateJoy(e);
+    e.preventDefault();
+  });
+  joyZone.addEventListener("pointerup", endJoy);
+  joyZone.addEventListener("pointercancel", endJoy);
+
+  function setFire(on) {
+    virtual.fire = on;
+    fireBtn.classList.toggle("active", on);
+  }
+  fireBtn.addEventListener("pointerdown", (e) => {
+    fireBtn.setPointerCapture(e.pointerId);
+    setFire(true);
+    e.preventDefault();
+  });
+  fireBtn.addEventListener("pointerup", () => setFire(false));
+  fireBtn.addEventListener("pointercancel", () => setFire(false));
+
+  pauseBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    togglePause();
   });
 
   // ---------- 启动 ----------
