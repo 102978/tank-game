@@ -167,7 +167,7 @@
   const MAX_ENEMIES_ON_FIELD = 4;
 
   // ---------- 状态 ----------
-  let grid = [];           // 2D 数组,存墙类型
+  let grid = buildMap(1);  // 2D 数组,存墙类型(初始即生成地图,避免菜单态渲染空数组崩溃)
   let player = null;
   let bullets = [];
   let enemies = [];
@@ -565,12 +565,12 @@
     showOverlay("游戏结束", `得分:${score} · 到达关卡 ${level}`);
   }
 
-  function showOverlay(title, sub) {
+  function showOverlay(title, sub, btnText = "再来一局") {
     const ov = document.getElementById("overlay");
     ov.style.display = "flex";
     ov.querySelector("h1").textContent = title;
     ov.querySelector("p").textContent = sub;
-    document.getElementById("startBtn").textContent = "再来一局";
+    document.getElementById("startBtn").textContent = btnText;
   }
 
   function updateHud() {
@@ -789,7 +789,7 @@
     }
     keys[e.key] = true;
     if (e.key === "p" || e.key === "P") {
-      if (gameState === "playing") { gameState = "paused"; showOverlay("已暂停", "按 P 继续"); }
+      if (gameState === "playing") { gameState = "paused"; showOverlay("已暂停", "按 P 继续", "继续游戏"); }
       else if (gameState === "paused") { hideOverlay(); gameState = "playing"; }
     }
   });
@@ -800,6 +800,7 @@
   }
 
   document.getElementById("startBtn").addEventListener("click", () => {
+    if (gameState === "paused") { hideOverlay(); gameState = "playing"; return; }
     if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
     score = 0; level = 1; lives = 3;
     hideOverlay();
